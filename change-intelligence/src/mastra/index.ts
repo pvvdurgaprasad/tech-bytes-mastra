@@ -10,11 +10,16 @@ import {
 } from '@mastra/observability';
 import { agent } from './agents/agent';
 import { startScheduleTool, stopScheduleTool } from './tools/schedule-tools';
+import { engineeringRequestWorkflow } from
+  "./workflows/engineering-request-workflow";
 
 export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
+  workflows: {
+    engineeringRequestWorkflow,
+  },  
   agents: { agent },
   tools: { startScheduleTool, stopScheduleTool },
   storage: new MastraCompositeStore({
