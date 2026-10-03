@@ -8,10 +8,10 @@ const run = await workflow.createRun();
 
 const result = await run.start({
   inputData: {
-    title: "Checkout API returning 500 errors",
+    title: "Possible duplicate settlement records",
     description:
-      "Some payment requests fail with a 500 error.",
-    affectedService: "Checkout API",
+      "Checkout remains available, but some completed payments appear to generate duplicate settlement records.",
+    affectedService: "checkout-api",
   },
 });
 

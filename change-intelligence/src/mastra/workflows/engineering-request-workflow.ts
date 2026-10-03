@@ -1,5 +1,7 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
+import { triageAssessmentSchema } from
+  "../agents/engineering-triage-agent";
 
 const requestSchema = z.object({
   title: z.string().min(1),
@@ -14,19 +16,41 @@ const normalizedRequestSchema = z.object({
   receivedAt: z.string(),
 });
 
-const classifiedRequestSchema = normalizedRequestSchema.extend({
-  priority: z.enum(["low", "medium", "high"]),
-  classificationReason: z.string(),
-});
+const agentClassifiedRequestSchema =
+  normalizedRequestSchema.extend({
+    assessment: triageAssessmentSchema,
+  });
+
 
 const workItemSchema = z.object({
   workItemId: z.string(),
   title: z.string(),
   description: z.string(),
   affectedService: z.string(),
+
   priority: z.enum(["low", "medium", "high"]),
+
+  impactSummary: z.string(),
+
   classificationReason: z.string(),
-  status: z.literal("ready-for-review"),
+
+  serviceTier: z.enum([
+    "critical",
+    "important",
+    "standard",
+  ]),
+
+  serviceOwner: z.string(),
+
+  requiresHumanReview: z.boolean(),
+
+  recommendedNextAction: z.string(),
+
+  status: z.enum([
+    "ready-for-processing",
+    "review-required",
+  ]),
+
   createdAt: z.string(),
 });
 
@@ -47,80 +71,124 @@ const normalizeRequest = createStep({
   },
 });
 
-const classifyPriority = createStep({
-  id: "classify-priority",
+const classifyWithAgent = createStep({
+  id: "classify-with-agent",
+
   inputSchema: normalizedRequestSchema,
-  outputSchema: classifiedRequestSchema,
 
-  execute: async ({ inputData }) => {
-    const combinedText =
-      `${inputData.title} ${inputData.description}`.toLowerCase();
+  outputSchema: agentClassifiedRequestSchema,
 
-    const highPrioritySignals = [
-      "outage",
-      "production down",
-      "data loss",
-      "security breach",
-      "500 error",
-    ];
-
-    const mediumPrioritySignals = [
-      "degraded",
-      "intermittent",
-      "timeout",
-      "slow",
-      "failed request",
-    ];
-
-    const matchedHighSignal = highPrioritySignals.find((signal) =>
-      combinedText.includes(signal)
+  execute: async ({ inputData, mastra }) => {
+    const agent = mastra.getAgent(
+      "engineeringTriageAgent"
     );
 
-    const matchedMediumSignal = mediumPrioritySignals.find((signal) =>
-      combinedText.includes(signal)
+    const response = await agent.generate(
+      `
+Classify this engineering request.
+
+Title:
+${inputData.title}
+
+Description:
+${inputData.description}
+
+Affected service:
+${inputData.affectedService}
+      `,
+      {
+        structuredOutput: {
+          schema: triageAssessmentSchema,
+        },
+      }
     );
-
-    if (matchedHighSignal) {
-      return {
-        ...inputData,
-        priority: "high" as const,
-        classificationReason:
-          `Matched high-priority signal: ${matchedHighSignal}`,
-      };
-    }
-
-    if (matchedMediumSignal) {
-      return {
-        ...inputData,
-        priority: "medium" as const,
-        classificationReason:
-          `Matched medium-priority signal: ${matchedMediumSignal}`,
-      };
-    }
 
     return {
       ...inputData,
-      priority: "low" as const,
-      classificationReason:
-        "No high- or medium-priority signal matched",
+      assessment: response.object,
+    };
+  },
+});
+
+const applyTriagePolicy = createStep({
+  id: "apply-triage-policy",
+
+  inputSchema: agentClassifiedRequestSchema,
+
+  outputSchema: agentClassifiedRequestSchema,
+
+  execute: async ({ inputData }) => {
+    const assessment = inputData.assessment;
+
+    const ownershipMissing =
+      assessment.serviceOwner === "unassigned";
+
+    const highRisk =
+      assessment.priority === "high";
+
+    const restrictedService =
+      assessment.serviceTier === "critical";
+
+    return {
+      ...inputData,
+
+      assessment: {
+        ...assessment,
+
+        requiresHumanReview:
+          assessment.requiresHumanReview ||
+          ownershipMissing ||
+          highRisk ||
+          restrictedService,
+      },
     };
   },
 });
 
 const createWorkItem = createStep({
   id: "create-work-item",
-  inputSchema: classifiedRequestSchema,
+
+  inputSchema: agentClassifiedRequestSchema,
+
   outputSchema: workItemSchema,
 
   execute: async ({ inputData }) => {
+    const { assessment } = inputData;
+
     return {
       workItemId: crypto.randomUUID(),
+
       title: inputData.title,
+
       description: inputData.description,
-      affectedService: inputData.affectedService,
-      priority: inputData.priority,
-      classificationReason: inputData.classificationReason,
-      status: "ready-for-review" as const,
+
+      affectedService:
+        assessment.affectedService,
+
+      priority: assessment.priority,
+
+      impactSummary:
+        assessment.impactSummary,
+
+      classificationReason:
+        assessment.classificationReason,
+
+      serviceTier:
+        assessment.serviceTier,
+
+      serviceOwner:
+        assessment.serviceOwner,
+
+      requiresHumanReview:
+        assessment.requiresHumanReview,
+
+      recommendedNextAction:
+        assessment.recommendedNextAction,
+
+      status: assessment.requiresHumanReview
+        ? "review-required" as const
+        : "ready-for-processing" as const,
+
       createdAt: new Date().toISOString(),
     };
   },
@@ -132,6 +200,7 @@ export const engineeringRequestWorkflow = createWorkflow({
   outputSchema: workItemSchema,
 })
   .then(normalizeRequest)
-  .then(classifyPriority)
+  .then(classifyWithAgent)
+  .then(applyTriagePolicy)
   .then(createWorkItem)
   .commit();

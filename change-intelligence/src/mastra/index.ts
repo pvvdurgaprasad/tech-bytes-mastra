@@ -12,16 +12,19 @@ import { agent } from './agents/agent';
 import { startScheduleTool, stopScheduleTool } from './tools/schedule-tools';
 import { engineeringRequestWorkflow } from
   "./workflows/engineering-request-workflow";
+import { engineeringTriageAgent } from
+  "./agents/engineering-triage-agent";
+import { serviceContextTool } from
+  "./tools/service-context-tool";
+
 
 export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
-  workflows: {
-    engineeringRequestWorkflow,
-  },  
-  agents: { agent },
-  tools: { startScheduleTool, stopScheduleTool },
+  workflows: { engineeringRequestWorkflow },  
+  agents: { agent, engineeringTriageAgent },
+  tools: { startScheduleTool, stopScheduleTool, serviceContextTool },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
     default: new LibSQLStore({
